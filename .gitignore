@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tmp_mpl/
+.matplotlib_cache/
+.tools/
+.external/
+仓库离线/
+仓库链接.txt
+README(作业提交模板).md
+
+# Local COLMAP databases can be regenerated from images and scripts.
+Assignment_03/data/database.db
+Assignment_03/data/colmap_py/database.db
+Assignment_03/data/colmap/dense/images/
+Assignment_03/data/colmap/dense/stereo/depth_maps/
+Assignment_03/data/colmap/dense/stereo/normal_maps/
+Assignment_03/data/colmap/dense/*.vis
+Assignment_04/data/*/database.db
+
+# Pix2Pix training outputs are reproducible and may become large.
+Assignment_02/Pix2Pix/runs/
