@@ -101,7 +101,7 @@ python render_3dgs_mv.py --colmap_dir data/chair --checkpoint data/chair/checkpo
 | --- | ---: |
 | Scene | chair |
 | Input images | 100 |
-| Registered images | 99 |
+| Registered images | 100 |
 | Sparse model | `data/chair/sparse/0` |
 | Projection debug images | `data/chair/projection_debug/` |
 
@@ -110,26 +110,26 @@ python render_3dgs_mv.py --colmap_dir data/chair --checkpoint data/chair/checkpo
 | Item | Value |
 | --- | ---: |
 | Training images | 100 |
-| Registered images | 99 |
+| Registered images | 100 |
 | Gaussian points | 1500 |
 | Render size | 192 x 192 |
 | Epochs | 10 |
-| Final mean L1 | 0.09178 |
+| Final mean L1 | 0.09190 |
 
 逐轮 mean L1：
 
 | Epoch | Mean L1 |
 | ---: | ---: |
-| 1 | 0.10779 |
-| 2 | 0.09795 |
-| 3 | 0.09563 |
-| 4 | 0.09425 |
-| 5 | 0.09313 |
-| 6 | 0.09265 |
-| 7 | 0.09233 |
-| 8 | 0.09210 |
-| 9 | 0.09191 |
-| 10 | 0.09178 |
+| 1 | 0.10815 |
+| 2 | 0.09836 |
+| 3 | 0.09600 |
+| 4 | 0.09452 |
+| 5 | 0.09330 |
+| 6 | 0.09277 |
+| 7 | 0.09246 |
+| 8 | 0.09226 |
+| 9 | 0.09206 |
+| 10 | 0.09190 |
 
 Debug render at epoch 10:
 
@@ -154,7 +154,7 @@ Debug render at epoch 10:
 | Renderer | Pure PyTorch, full-image Gaussian evaluation | CUDA tile rasterizer |
 | Initialization | pycolmap sparse points | COLMAP sparse points |
 | Densification / pruning | Not implemented | Implemented |
-| Local run result | 10 epochs, 1500 points, final mean L1 0.09178 | Not run locally |
+| Local run result | 10 epochs, 1500 points, final mean L1 0.09190 | Not run locally |
 | Training speed | Slower because each Gaussian is evaluated over the image grid | Much faster due to CUDA kernels and tiling |
 | Memory usage | Higher for the same image size and point count | More efficient |
 | Rendering quality | Coarse but verifies the whole pipeline | Expected to be sharper and denser |
