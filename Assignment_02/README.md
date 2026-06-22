@@ -59,21 +59,29 @@ C:/Users/14586/Desktop/数字图像处理/facades/
 Poisson 部分运行 `--demo` 后检查：
 
 - `pics/poisson_demo.png`
+- `pics/poisson_result1.png`
+- `pics/poisson_result2.png`
 
-Pix2Pix 部分可通过训练时生成的 preview 图进行定性评估，并对比 source、generated 和 target 三列的结构一致性。训练脚本中的 `--lambda_l1` 默认取 100，与 Pix2Pix 论文常用设置一致。
+Pix2Pix 部分可通过训练时生成的 preview 图进行定性评估。本机 facades 数据左半边是真实建筑照片，右半边是语义标签图，因此训练方向设为 label -> photo。训练脚本中的 `--lambda_l1` 默认取 100，与 Pix2Pix 论文常用设置一致。
 
-preview 图排列方式为：第一行 source，第二行 generated，第三行 target。
+preview 图排列方式为：第一行 source label，第二行 generated photo，第三行 target photo。
 
 ## Results
 
 | Task | Status | Result |
 | --- | --- | --- |
-| Poisson Image Editing | 已实跑 | `pics/poisson_demo.png` |
-| Pix2Pix | facades 20 epoch 已实跑 | `pics/pix2pix_facades_epoch_0020.png` |
+| Poisson Image Editing | 已实跑 | `pics/poisson_result1.png`, `pics/poisson_result2.png` |
+| Pix2Pix | facades label -> photo 20 epoch 已实跑 | `pics/pix2pix_facades_epoch_0020.png` |
 
 ### Poisson Image Editing
 
-![Poisson blending result](pics/poisson_demo.png)
+Input images and polygon selection:
+
+![Poisson input and polygon](pics/poisson_result1.png)
+
+Target placement and blended result:
+
+![Poisson target and result](pics/poisson_result2.png)
 
 ### Pix2Pix
 
@@ -82,6 +90,7 @@ preview 图排列方式为：第一行 source，第二行 generated，第三行 
 | Item | Value |
 | --- | ---: |
 | Dataset | facades |
+| Direction | label -> photo |
 | Train images | 400 |
 | Val images | 100 |
 | Test images | 106 |

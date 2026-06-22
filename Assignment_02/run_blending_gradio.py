@@ -5,7 +5,7 @@ import gradio as gr
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 
 def initialize_polygon():
@@ -83,26 +83,31 @@ def erode_mask(mask):
     return 1.0 - keep
 
 
-def cal_laplacian_loss(foreground_img, foreground_mask, blended_img, background_mask):
-    fg_lap = laplacian(foreground_img)
-    out_lap = laplacian(blended_img)
-    fg_region = foreground_mask.expand_as(fg_lap)
-    bg_region = background_mask.expand_as(out_lap)
-    if fg_region.sum() < 1 or bg_region.sum() < 1:
-        return torch.zeros((), device=foreground_img.device, dtype=foreground_img.dtype)
-    fg_vals = fg_lap[fg_region > 0.5]
-    out_vals = out_lap[bg_region > 0.5]
-    count = min(fg_vals.numel(), out_vals.numel())
-    return F.mse_loss(out_vals[:count], fg_vals[:count])
+def align_foreground_to_background(foreground_image, background_image, points, dx, dy):
+    fg = np.asarray(foreground_image.convert("RGB"), dtype=np.uint8)
+    bg = np.asarray(background_image.convert("RGB"), dtype=np.uint8)
+    fg_h, fg_w = fg.shape[:2]
+    bg_h, bg_w = bg.shape[:2]
+    offset = np.array([int(dx), int(dy)], dtype=np.int64)
+    fg_pts = np.asarray(points, dtype=np.int64)
+    bg_pts = fg_pts + offset
 
+    fg_mask = create_mask_from_points(fg_pts, fg_h, fg_w) > 0
+    bg_mask = create_mask_from_points(bg_pts, bg_h, bg_w) > 0
+    yy, xx = np.mgrid[0:bg_h, 0:bg_w]
+    sx = xx - offset[0]
+    sy = yy - offset[1]
+    in_source = (sx >= 0) & (sx < fg_w) & (sy >= 0) & (sy < fg_h)
+    valid = bg_mask & in_source
+    source_inside = np.zeros_like(valid)
+    source_inside[valid] = fg_mask[sy[valid], sx[valid]]
+    valid &= source_inside
 
-def paste_foreground_into_background(fg, fg_mask, bg, bg_mask):
-    fg_pixels = fg[fg_mask.bool().expand_as(fg)]
-    result = bg.clone()
-    target = bg_mask.bool().expand_as(bg)
-    count = min(target.sum().item(), fg_pixels.numel())
-    result[target] = fg_pixels[:count]
-    return result
+    source_aligned = bg.copy()
+    initial = bg.copy()
+    source_aligned[valid] = fg[sy[valid], sx[valid]]
+    initial[valid] = fg[sy[valid], sx[valid]]
+    return source_aligned, initial, (valid.astype(np.uint8) * 255)
 
 
 def poisson_blend(
@@ -123,29 +128,35 @@ def poisson_blend(
         return background_image_original
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    fg = image_to_tensor(foreground_image_original, device)
+    source_aligned, initial, bg_mask = align_foreground_to_background(
+        foreground_image_original,
+        background_image_original,
+        polygon_state["points"],
+        dx,
+        dy,
+    )
     bg = image_to_tensor(background_image_original, device)
-
-    fg_pts = np.asarray(polygon_state["points"], dtype=np.int64)
-    bg_pts = fg_pts + np.array([int(dx), int(dy)], dtype=np.int64)
-    fg_mask = create_mask_from_points(fg_pts, fg.shape[-2], fg.shape[-1])
-    bg_mask = create_mask_from_points(bg_pts, bg.shape[-2], bg.shape[-1])
-    fg_mask_t = mask_to_tensor(fg_mask, device)
+    source = image_to_tensor(Image.fromarray(source_aligned), device)
     bg_mask_t = mask_to_tensor(bg_mask, device)
 
     if bg_mask_t.sum() < 1:
         return background_image_original
 
-    variable = paste_foreground_into_background(fg, fg_mask_t, bg, bg_mask_t).detach().requires_grad_(True)
+    variable = image_to_tensor(Image.fromarray(initial), device).detach().requires_grad_(True)
     optimizer = torch.optim.Adam([variable], lr=lr)
     inner = erode_mask(bg_mask_t)
+    if inner.sum() < 1:
+        inner = bg_mask_t
     boundary = (bg_mask_t - inner).clamp(0.0, 1.0)
+    source_lap = laplacian(source).detach()
+    denom = bg_mask_t.sum().clamp_min(1.0) * 3.0
 
     for step in range(int(steps)):
         candidate = variable * bg_mask_t + bg.detach() * (1.0 - bg_mask_t)
-        region_loss = cal_laplacian_loss(fg, fg_mask_t, candidate, bg_mask_t)
-        boundary_loss = ((candidate - bg) * boundary).pow(2).mean()
-        loss = region_loss + 50.0 * boundary_loss
+        region_loss = ((laplacian(candidate) - source_lap) * inner).pow(2).sum() / denom
+        color_loss = ((candidate - source) * inner).pow(2).sum() / denom
+        boundary_loss = ((candidate - bg) * boundary).pow(2).sum() / denom
+        loss = region_loss + 0.08 * color_loss + 30.0 * boundary_loss
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -170,24 +181,122 @@ def close_polygon_and_reset_dx(img_original, polygon_state, dx, dy, background_i
 
 
 def make_demo_images():
-    fg = Image.new("RGB", (220, 180), (245, 247, 250))
+    fg = Image.new("RGB", (420, 280), (116, 167, 182))
     draw = ImageDraw.Draw(fg)
-    draw.ellipse((45, 35, 175, 155), fill=(220, 80, 70), outline=(80, 40, 40), width=3)
-    draw.line((75, 100, 145, 100), fill=(255, 240, 180), width=10)
-    bg = Image.new("RGB", (300, 220), (90, 145, 170))
+    for y in range(280):
+        color = (95 + y // 12, 148 + y // 18, 166 + y // 20)
+        draw.line((0, y, 420, y), fill=color)
+    for x in range(-40, 450, 55):
+        draw.arc((x, 54, x + 80, 100), 0, 180, fill=(215, 232, 236), width=2)
+        draw.arc((x, 178, x + 95, 224), 0, 180, fill=(202, 224, 230), width=2)
+    draw.ellipse((115, 92, 295, 190), fill=(235, 108, 70), outline=(113, 58, 48), width=3)
+    draw.polygon([(292, 140), (358, 90), (342, 140), (360, 192)], fill=(231, 92, 64), outline=(113, 58, 48))
+    draw.polygon([(184, 95), (222, 42), (228, 107)], fill=(242, 143, 82), outline=(113, 58, 48))
+    draw.polygon([(188, 190), (228, 235), (230, 176)], fill=(242, 143, 82), outline=(113, 58, 48))
+    draw.ellipse((142, 120, 164, 142), fill=(245, 245, 245))
+    draw.ellipse((151, 128, 159, 136), fill=(25, 25, 25))
+    draw.arc((130, 142, 184, 176), 10, 155, fill=(91, 45, 42), width=3)
+
+    bg = Image.new("RGB", (560, 360), (139, 192, 235))
     draw = ImageDraw.Draw(bg)
-    draw.rectangle((0, 140, 300, 220), fill=(60, 120, 100))
-    draw.ellipse((190, 25, 270, 105), fill=(245, 215, 90))
+    for y in range(360):
+        if y < 130:
+            color = (130 + y // 10, 188 + y // 15, 236)
+        elif y < 285:
+            color = (64, 155 + (y - 130) // 8, 183 + (y - 130) // 14)
+        else:
+            color = (226, 203 - (y - 285) // 9, 142)
+        draw.line((0, y, 560, y), fill=color)
+    draw.ellipse((56, 42, 170, 82), fill=(242, 248, 252))
+    draw.ellipse((122, 34, 246, 80), fill=(242, 248, 252))
+    draw.rectangle((0, 130, 560, 136), fill=(238, 246, 249))
+    for x in range(0, 580, 42):
+        draw.arc((x, 210, x + 82, 260), 0, 180, fill=(226, 242, 244), width=2)
+    draw.rectangle((0, 285, 560, 360), fill=(225, 200, 139))
+    draw.arc((40, 292, 520, 410), 190, 350, fill=(244, 236, 207), width=7)
     return fg, bg
+
+
+def make_demo_polygon():
+    return [
+        (108, 145),
+        (126, 114),
+        (176, 88),
+        (215, 54),
+        (230, 104),
+        (276, 108),
+        (360, 88),
+        (344, 140),
+        (362, 192),
+        (296, 169),
+        (232, 178),
+        (228, 236),
+        (190, 195),
+        (145, 184),
+        (116, 164),
+    ]
+
+
+def _panel(draw, sheet, title, image, box, note):
+    x, y, w, h = box
+    draw.text((x, y), title, fill=(38, 44, 52))
+    frame = Image.new("RGB", (w, h), (248, 250, 252))
+    content = ImageOps.contain(image, (w, h))
+    frame.paste(content, ((w - content.width) // 2, (h - content.height) // 2))
+    sheet.paste(frame, (x, y + 28))
+    draw.rectangle((x, y + 28, x + w, y + 28 + h), outline=(218, 224, 232), width=1)
+    draw.text((x, y + 42 + h), note, fill=(76, 82, 90))
+
+
+def make_poisson_result_pages(fg, bg, polygon, dx, dy, result):
+    fg_marked = draw_polygon_overlay(fg, polygon, closed=True)
+    bg_marked = update_background(bg, {"points": polygon, "closed": True}, dx, dy)
+    result_image = Image.fromarray(result) if isinstance(result, np.ndarray) else result
+
+    page1 = Image.new("RGB", (980, 940), (255, 255, 255))
+    draw1 = ImageDraw.Draw(page1)
+    draw1.text((350, 24), "Poisson Image Blending", fill=(36, 40, 46))
+    draw1.text((76, 70), "Select a foreground polygon, then translate that polygon onto the target background.", fill=(58, 64, 72))
+    _panel(draw1, page1, "Foreground Image", fg, (70, 120, 390, 260), "Source image used for selecting the object region.")
+    _panel(draw1, page1, "Background Image", bg, (520, 120, 390, 260), "Background where the selected object will be placed.")
+    _panel(draw1, page1, "Foreground Image with Polygon", fg_marked, (70, 500, 390, 260), "The red polygon encloses the foreground object.")
+    draw1.text((70, 835), "The selected polygon is intentionally tight around the object, so background pixels are not copied as a visible block.", fill=(76, 82, 90))
+
+    page2 = Image.new("RGB", (980, 720), (255, 255, 255))
+    draw2 = ImageDraw.Draw(page2)
+    draw2.text((350, 24), "Poisson Image Blending", fill=(36, 40, 46))
+    draw2.text((92, 70), "After choosing the target position, Poisson optimization preserves source gradients and matches the target boundary.", fill=(58, 64, 72))
+    _panel(draw2, page2, "Target Position on Background", bg_marked, (70, 120, 390, 260), "Translated polygon on the background image.")
+    _panel(draw2, page2, "Blended Result", result_image, (520, 120, 390, 260), "Final Poisson result at the selected location.")
+    draw2.text((70, 470), f"Offset: dx={dx}, dy={dy}; polygon points={len(polygon)}; optimization steps match source Laplacian with boundary constraints.", fill=(76, 82, 90))
+
+    sheet = Image.new("RGB", (1180, 1040), (255, 255, 255))
+    draw = ImageDraw.Draw(sheet)
+    draw.text((404, 24), "Poisson Image Blending", fill=(36, 40, 46))
+    draw.text((178, 70), "Foreground selection, target placement, and final blended result generated by the same demo command.", fill=(58, 64, 72))
+    _panel(draw, sheet, "Foreground Image", fg, (70, 118, 480, 300), "Source object before selecting the polygon.")
+    _panel(draw, sheet, "Background Image", bg, (630, 118, 480, 300), "Background where the selected polygon will be placed.")
+    _panel(draw, sheet, "Foreground Image with Polygon", fg_marked, (70, 512, 480, 300), "The red polygon defines the source region.")
+    _panel(draw, sheet, "Blended Result", result_image, (630, 512, 480, 300), "Final Poisson result at the selected target location.")
+    draw.text((70, 908), "Target overlay:", fill=(38, 44, 52))
+    preview = ImageOps.contain(bg_marked, (250, 130))
+    sheet.paste(preview, (250, 856))
+    draw.text((630, 844), f"Offset: dx={dx}, dy={dy}; polygon points={len(polygon)}.", fill=(76, 82, 90))
+    return page1, page2, sheet
 
 
 def run_demo(steps):
     out_dir = Path("pics")
     out_dir.mkdir(exist_ok=True)
     fg, bg = make_demo_images()
-    state = {"points": [(55, 45), (170, 45), (165, 150), (50, 145)], "closed": True}
-    result = poisson_blend(fg, bg, 40, 20, state, steps=steps)
-    Image.fromarray(result).save(out_dir / "poisson_demo.png")
+    polygon = make_demo_polygon()
+    dx, dy = 78, 58
+    state = {"points": polygon, "closed": True}
+    result = poisson_blend(fg, bg, dx, dy, state, steps=steps)
+    page1, page2, sheet = make_poisson_result_pages(fg, bg, polygon, dx, dy, result)
+    page1.save(out_dir / "poisson_result1.png")
+    page2.save(out_dir / "poisson_result2.png")
+    sheet.save(out_dir / "poisson_demo.png")
     print(out_dir / "poisson_demo.png")
 
 

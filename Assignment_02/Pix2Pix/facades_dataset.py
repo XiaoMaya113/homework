@@ -25,8 +25,8 @@ class FacadesDataset(Dataset):
     def __getitem__(self, index):
         image = Image.open(self.paths[index]).convert("RGB")
         w, h = image.size
-        left = image.crop((0, 0, w // 2, h))
-        right = image.crop((w // 2, 0, w, h))
-        source = self.transform(left)
-        target = self.transform(right)
+        photo = image.crop((0, 0, w // 2, h))
+        label = image.crop((w // 2, 0, w, h))
+        source = self.transform(label)
+        target = self.transform(photo)
         return {"source": source, "target": target, "path": str(self.paths[index])}
