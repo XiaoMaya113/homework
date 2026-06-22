@@ -4,6 +4,7 @@ from pathlib import Path
 import cv2
 import gradio as gr
 import numpy as np
+from PIL import Image
 
 
 source_points = []
@@ -132,15 +133,106 @@ def make_demo_image(size=360):
     return image
 
 
+def _fit_into(image, width, height, background=(255, 255, 255)):
+    canvas = np.full((height, width, 3), background, dtype=np.uint8)
+    h, w = image.shape[:2]
+    scale = min(width / w, height / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    x0 = (width - new_w) // 2
+    y0 = (height - new_h) // 2
+    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+    return canvas
+
+
+def _draw_panel(canvas, x, y, w, h, title, content=None):
+    cv2.rectangle(canvas, (x, y), (x + w, y + h), (225, 230, 235), 1, cv2.LINE_AA)
+    cv2.putText(canvas, title, (x + 12, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (80, 90, 105), 1, cv2.LINE_AA)
+    if content is None:
+        cv2.putText(
+            canvas,
+            "Waiting for result",
+            (x + w // 2 - 86, y + h // 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (145, 150, 160),
+            1,
+            cv2.LINE_AA,
+        )
+        return
+    content = _fit_into(content, w - 24, h - 44)
+    canvas[y + 34 : y + 34 + content.shape[0], x + 12 : x + 12 + content.shape[1]] = content
+
+
+def _draw_control_overlay(image, src_pts, dst_pts):
+    canvas = image.copy()
+    for p in src_pts:
+        cv2.circle(canvas, tuple(map(int, p)), 7, (30, 90, 255), -1, cv2.LINE_AA)
+    for p in dst_pts:
+        cv2.circle(canvas, tuple(map(int, p)), 7, (255, 70, 60), -1, cv2.LINE_AA)
+    for a, b in zip(src_pts, dst_pts):
+        cv2.arrowedLine(canvas, tuple(map(int, a)), tuple(map(int, b)), (30, 180, 80), 3, cv2.LINE_AA, tipLength=0.22)
+    return canvas
+
+
+def _save_gif(frames, output, duration=120):
+    pil_frames = [Image.fromarray(frame) for frame in frames]
+    pil_frames[0].save(output, save_all=True, append_images=pil_frames[1:], duration=duration, loop=0, optimize=True)
+
+
+def _compose_demo_frame(image, point_view, result_view, status, active=None):
+    canvas = np.full((650, 1120, 3), (248, 249, 251), dtype=np.uint8)
+    cv2.putText(canvas, "Point Based Image Deformation Demo", (26, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (30, 40, 52), 2, cv2.LINE_AA)
+    _draw_panel(canvas, 24, 56, 520, 250, "Upload Image", image)
+    _draw_panel(canvas, 576, 56, 520, 250, "Warped Result", result_view)
+    _draw_panel(canvas, 24, 332, 520, 250, "Click to Select Source and Target Points", point_view)
+
+    cv2.rectangle(canvas, (576, 332), (1096, 582), (235, 239, 244), -1)
+    cv2.putText(canvas, "Controls", (602, 370), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (55, 65, 75), 1, cv2.LINE_AA)
+    cv2.rectangle(canvas, (602, 398), (1068, 438), (210, 225, 245), -1)
+    cv2.rectangle(canvas, (602, 456), (1068, 496), (226, 232, 239), -1)
+    cv2.putText(canvas, "Run Warping", (780, 423), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (30, 50, 75), 1, cv2.LINE_AA)
+    cv2.putText(canvas, "Clear Points", (782, 481), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (70, 75, 85), 1, cv2.LINE_AA)
+    cv2.putText(canvas, status, (602, 540), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (45, 55, 68), 1, cv2.LINE_AA)
+    if active is not None:
+        x, y = active
+        cv2.circle(canvas, (x, y), 12, (255, 140, 60), 2, cv2.LINE_AA)
+    return canvas
+
+
+def make_demo_gif(image, src, dst):
+    frames = []
+    frames.extend([_compose_demo_frame(image, None, None, "Step 1: upload image") for _ in range(5)])
+    selected_src = []
+    selected_dst = []
+    for idx, (s, d) in enumerate(zip(src, dst), start=1):
+        selected_src.append(s)
+        point_view = _draw_control_overlay(image, selected_src, selected_dst)
+        frames.extend([_compose_demo_frame(image, point_view, None, f"Select source point {idx}", (72 + int(s[0] * 1.22), 366 + int(s[1] * 0.58))) for _ in range(3)])
+        selected_dst.append(d)
+        point_view = _draw_control_overlay(image, selected_src, selected_dst)
+        frames.extend([_compose_demo_frame(image, point_view, None, f"Select target point {idx}", (72 + int(d[0] * 1.22), 366 + int(d[1] * 0.58))) for _ in range(4)])
+
+    point_view = _draw_control_overlay(image, src, dst)
+    for alpha in np.linspace(0.0, 1.0, 18):
+        inter = src + (dst - src) * alpha
+        warped = rbf_warp(image, src, inter, regularization=1e-3)
+        status = f"Run warping: {int(alpha * 100):3d}%"
+        frames.append(_compose_demo_frame(image, point_view, warped, status))
+    frames.extend([frames[-1]] * 8)
+    return frames
+
+
 def run_demo():
     out_dir = Path("pics")
     out_dir.mkdir(exist_ok=True)
     image = make_demo_image()
     src = np.array([[145, 150], [215, 150], [125, 230], [235, 230], [180, 75]], dtype=np.float64)
     dst = np.array([[125, 140], [235, 140], [140, 245], [220, 245], [180, 50]], dtype=np.float64)
-    warped = rbf_warp(image, src, dst, regularization=1e-3)
-    cv2.imwrite(str(out_dir / "rbf_demo.png"), cv2.cvtColor(warped, cv2.COLOR_RGB2BGR))
-    print(out_dir / "rbf_demo.png")
+    output = out_dir / "point_demo.gif"
+    _save_gif(make_demo_gif(image, src, dst), output)
+    print(output)
 
 
 def build_app():

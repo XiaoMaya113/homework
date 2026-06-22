@@ -33,27 +33,27 @@ python run_point_transform.py --demo
 
 ## Evaluation
 
-运行两个 `--demo` 命令后，检查 `pics/` 中生成的结果图：
+运行两个 `--demo` 命令后，检查 `pics/` 中生成的动态演示：
 
-- `pics/global_demo.png`
-- `pics/rbf_demo.png`
+- `pics/global_demo.gif`
+- `pics/point_demo.gif`
 
-全局变换应能看到缩放、旋转、平移和翻转的组合效果；点引导变形应能看到控制点附近产生局部形变，且图像没有明显前向映射空洞。
+全局变换 demo 展示缩放、旋转、平移和翻转参数变化后的输出；点引导变形 demo 展示交替选择 source / target 控制点并运行 warping 后的结果，图像没有明显前向映射空洞。
 
 ## Results
 
 | Task | Method | Output |
 | --- | --- | --- |
-| Basic transformation | 3x3 homogeneous affine matrix + `cv2.warpAffine` | `pics/global_demo.png` |
-| Point guided deformation | RBF/TPS displacement field + inverse sampling | `pics/rbf_demo.png` |
+| Basic transformation | 3x3 homogeneous affine matrix + `cv2.warpAffine` | `pics/global_demo.gif` |
+| Point guided deformation | RBF/TPS displacement field + inverse sampling | `pics/point_demo.gif` |
 
 ### Basic Image Geometric Transformation
 
-![Global transform result](pics/global_demo.png)
+![Global transform demo](pics/global_demo.gif)
 
 ### Point Based Image Deformation
 
-![RBF deformation result](pics/rbf_demo.png)
+![Point guided deformation demo](pics/point_demo.gif)
 
 ## Implementation Notes
 
